@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Shamir Secret Solver</title>
+    <meta charset="UTF-8" />
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        pre { background: #f2f2f2; padding: 1em; white-space: pre-wrap; font-size: 1.2em; }
+    </style>
+</head>
+<body>
+    <h2>Shamir Secret Solver</h2>
+    <p>Select your JSON file containing roots and keys.</p>
+    <input type="file" id="fileInput" accept=".json" />
+    <button onclick="handleFile()">Solve</button>
+
+    <h3>Output:</h3>
+    <pre id="output"></pre>
+
+<script>
+
+function decodeValueBigInt(value, base) {
+    if (base < 2 || base > 36) throw new Error('Base must be between 2 and 36');
+
+    const digits = '0123456789abcdefghijklmnopqrstuvwxyz';
+    value = value.toLowerCase();
+
+    let result = 0n;
+    const bigBase = BigInt(base);
+
+    for (const char of value) {
+        const digit = BigInt(digits.indexOf(char));
+        if (digit < 0n || digit >= bigBase) {
+            throw new Error(`Invalid digit ${char} for base ${base}`);
+        }
+        result = result * bigBase + digit;
+    }
+    return result; 
+}
+
+
+function rational(num, den = 1n) {
+    return { num: BigInt(num), den: BigInt(den) };
+}
+
+function rationalAdd(a, b) {
+    return rational(a.num * b.den + b.num * a.den, a.den * b.den);
+}
+
+function rationalMul(a, b) {
+    return rational(a.num * b.num, a.den * b.den);
+}
+
+function rationalDiv(a, b) {
+    if (b.num === 0n) throw new Error('Division by zero');
+    return rational(a.num * b.den, a.den * b.num);
+}
+
+function rationalNeg(a) {
+    return rational(-a.num, a.den);
+}
+
+function rationalSimplify(frac) {
+    function gcd(a, b) {
+        a = a < 0n ? -a : a;
+        b = b < 0n ? -b : b;
+        while (b !== 0n) {
+            let t = b;
+            b = a % b;
+            a = t;
+        }
+        return a;
+    }
+    const g = gcd(frac.num, frac.den);
+    return { num: frac.num / g, den: frac.den / g };
+}
+
+
+function rationalRound(frac) {
+    const simplified = rationalSimplify(frac);
+    const doubledNum = simplified.num * 2n;
+    const halfDen = simplified.den;
+    const div = doubledNum / halfDen;
+    if (div % 2n === 0n) {
+        return div / 2n;
+    } else {
+        return div / 2n + (div > 0n ? 1n : -1n);
+    }
+}
+
+function lagrangeInterpolationBigInt(points) {
+    let secret = rational(0n, 1n);
+
+    for (let i = 0; i < points.length; i++) {
+        const xi = BigInt(points[i].x);
+        const yi = points[i].y; 
+
+        let numerator = rational(1n, 1n);
+        let denominator = rational(1n, 1n);
+
+        for (let j = 0; j < points.length; j++) {
+            if (j === i) continue;
+            const xj = BigInt(points[j].x);
+            numerator = rationalMul(numerator, rational(-xj, 1n));             
+            denominator = rationalMul(denominator, rational(xi - xj, 1n));    
+        }
+
+
+        const term = rationalMul(rational(yi, 1n), rationalDiv(numerator, denominator));
+        secret = rationalAdd(secret, term);
+    }
+
+    return rationalRound(secret);
+}
+
+function handleFile() {
+    const output = document.getElementById('output');
+    const fileInput = document.getElementById('fileInput');
+
+    if (!fileInput.files.length) {
+        output.textContent = 'Please select a JSON file first.';
+        return;
+    }
+
+    const file = fileInput.files[0];
+    const reader = new FileReader();
+
+    reader.onload = function(event) {
+        let input;
+        try {
+            input = JSON.parse(event.target.result);
+        } catch (e) {
+            output.textContent = 'Invalid JSON file!';
+            return;
+        }
+
+        const n = input.keys && input.keys.n;
+        const k = input.keys && input.keys.k;
+        if (!n || !k) {
+            output.textContent = 'JSON must contain keys.n and keys.k';
+            return;
+        }
+
+        const points = [];
+        try {
+            for (const key in input) {
+                if (key === 'keys') continue;
+                const item = input[key];
+                const x = parseInt(key);
+                if (isNaN(x) || !item || !item.base || !item.value) continue;
+
+                const base = parseInt(item.base);
+                if (isNaN(base)) continue;
+
+                // Decode y using BigInt decoder
+                const y = decodeValueBigInt(item.value, base);
+                points.push({ x, y, base });
+            }
+        } catch (err) {
+            output.textContent = 'Error during decoding: ' + err.message;
+            return;
+        }
+
+        if (points.length < k) {
+            output.textContent = `Not enough points! Needed at least ${k}, found ${points.length}.`;
+            return;
+        }
+
+        const solPoints = points.slice(0, k);
+
+        try {
+            const secretC = lagrangeInterpolationBigInt(solPoints);
+            output.textContent = secretC.toString();
+        } catch (err) {
+            output.textContent = 'Error during interpolation: ' + err.message;
+        }
+    };
+
+    reader.readAsText(file);
+}
+
+</script>
+</body>
+</html>
